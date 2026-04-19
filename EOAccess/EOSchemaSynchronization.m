@@ -85,7 +85,7 @@ static id _schemaSynchronizationDelegate = nil;
 	  [changes setObject:[NSNumber numberWithUnsignedInt:[modelAttribute precision]]
 		      forKey:EOPrecisionKey];
 	}
-      if ([modelAttribute scale])
+      if ([modelAttribute precision] || [modelAttribute scale])
 	{
 	  [changes setObject:[NSNumber numberWithInt:[modelAttribute scale]]
 		      forKey:EOScaleKey];
