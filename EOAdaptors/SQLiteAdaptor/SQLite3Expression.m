@@ -366,7 +366,7 @@ static NSString *escapeValue(id value)
   sqlExps = [NSMutableArray array];
   entity = [entityGroup objectAtIndex: 0];
   expr = [self sqlExpressionWithEntity: entity];
-  tmpTableName = [NSString stringWithFormat: @"__gdl2tmp__%@_%@",
+  tmpTableName = [NSString stringWithFormat: @"__gdl2_schema_sync_tmp__%@_%@",
 			   tableName,
 			   [[NSProcessInfo processInfo] globallyUniqueString]];
   quotedTableName = [expr sqlStringForSchemaObjectName: tableName];
