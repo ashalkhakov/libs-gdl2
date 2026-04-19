@@ -36,6 +36,7 @@
 #include <EOAccess/EOSchemaSynchronization.h>
 #include <EOControl/EONull.h>
 #include <Foundation/NSData.h>
+#include <Foundation/NSProcessInfo.h>
 
 @implementation SQLite3Expression 
 static NSString *escapeValue(id value)
@@ -365,7 +366,9 @@ static NSString *escapeValue(id value)
   sqlExps = [NSMutableArray array];
   entity = [entityGroup objectAtIndex: 0];
   expr = [self sqlExpressionWithEntity: entity];
-  tmpTableName = @"__gdl2tmp__";
+  tmpTableName = [NSString stringWithFormat: @"__gdl2tmp__%@_%@",
+			   tableName,
+			   [[NSProcessInfo processInfo] globallyUniqueString]];
   quotedTableName = [expr sqlStringForSchemaObjectName: tableName];
   quotedTmpTableName = [expr sqlStringForSchemaObjectName: tmpTableName];
 

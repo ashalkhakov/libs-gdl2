@@ -42,6 +42,7 @@
 #include <Foundation/NSDictionary.h>
 #include <Foundation/NSEnumerator.h>
 #include <Foundation/NSException.h>
+#include <Foundation/NSProcessInfo.h>
 #else
 #include <Foundation/Foundation.h>
 #endif
@@ -656,7 +657,16 @@ withChangeDictionary:(NSDictionary *)changes
 	      NSNumber *numberValue;
 
 	      oldTypeAttribute = [self _attributeInEntityGroup: group
-						   columnNamed: currentColumnName];
+						   columnNamed: columnName];
+	      if (oldTypeAttribute == nil)
+		{
+		  oldTypeAttribute = [self _attributeInEntityGroup: group
+						       columnNamed: currentColumnName];
+		}
+	      if (oldTypeAttribute == nil)
+		{
+		  continue;
+		}
 	      newTypeAttribute = AUTORELEASE([[EOAttribute alloc] init]);
 	      [newTypeAttribute setName: currentColumnName];
 	      [newTypeAttribute setColumnName: currentColumnName];
@@ -677,7 +687,7 @@ withChangeDictionary:(NSDictionary *)changes
 	      [sqlExps addObjectsFromArray:
 			[self statementsToConvertColumnNamed: currentColumnName
 					       inTableNamed: tableName
-						   fromType: (oldTypeAttribute ? (id <EOColumnTypes>)oldTypeAttribute : (id <EOColumnTypes>)newTypeAttribute)
+						   fromType: (id <EOColumnTypes>)oldTypeAttribute
 						     toType: (id <EOColumnTypes>)newTypeAttribute
 						    options: options]];
 	    }
@@ -768,7 +778,9 @@ withChangeDictionary:(NSDictionary *)changes
   sqlExps = [NSMutableArray array];
   entity = [entityGroup objectAtIndex: 0];
   expr = [self sqlExpressionWithEntity: entity];
-  tmpTableName = [NSString stringWithFormat: @"__gdl2tmp__%@", tableName];
+  tmpTableName = [NSString stringWithFormat: @"__gdl2tmp__%@_%@",
+			   tableName,
+			   [[NSProcessInfo processInfo] globallyUniqueString]];
   quotedTableName = [expr sqlStringForSchemaObjectName: tableName];
   quotedTmpTableName = [expr sqlStringForSchemaObjectName: tmpTableName];
 

@@ -139,6 +139,11 @@ equivalentToColumnType:(id <EOColumnTypes>)columnType2
     {
       [errors addObject: @"Direct column renaming is not supported by this adaptor."];
     }
+  if ([changes objectForKey: EOAllowsNullKey]
+      && ![self supportsDirectColumnNullRuleModification])
+    {
+      [errors addObject: @"Direct column null rule modification is not supported by this adaptor."];
+    }
 
   return [errors count] ? errors : nil;
 }
