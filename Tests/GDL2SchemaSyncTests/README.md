@@ -24,6 +24,8 @@ table-rebuild vs. ALTER TABLE.
 
 ## Tests covered
 
+### Column-level schema changes
+
 | Test method               | Change type                                  |
 |---------------------------|----------------------------------------------|
 | `testInitialSchemaSetup`  | Create table; verify columns exist           |
@@ -33,6 +35,35 @@ table-rebuild vs. ALTER TABLE.
 | `testChangeColumnType`    | Change a column's external type              |
 | `testChangeColumnNullRule`| Change a column from `NULL` to `NOT NULL`    |
 | `testRenameTable`         | Rename the table                             |
+
+### Relationship-level schema changes
+
+Relationships are represented at the DB level as FK columns (and, on adaptors
+that support it, FK constraints).  Tests verify the observable result in the
+live schema (column presence/absence, `allowsNull` flag, and — where supported
+— the presence of described FK relationships).
+
+| Test method                             | Change type                                                   |
+|-----------------------------------------|---------------------------------------------------------------|
+| `testInitialSchemaSetupWithToOneRelationship` | Create two tables with FK column; verify FK column exists; on PostgreSQL verify FK relationship is described back |
+| `testAddToOneRelationship`              | Add FK column to child table (= new to-one)                   |
+| `testDropToOneRelationship`             | Drop FK column from child table (= drop to-one)               |
+| `testToOneRelationshipMandatory`        | Make FK column NOT NULL (= `isMandatory = YES`)               |
+| `testAddToManyRelationship`             | Add FK column on the many-side (= new to-many from parent's view) |
+
+**Notes on to-many relationships**: A to-many relationship has no DB schema of
+its own — the FK lives on the "many" side (child) table.  `testAddToManyRelationship`
+verifies the FK backing column is created on the child table, which is the
+observable DB effect of adding a to-many.
+
+**Notes on multiplicity (isToMany) changes**: Changing `isToMany` is a model
+metadata change with no DB-visible effect.  These are not tested.
+
+**Notes on FK constraint inspection**: `describesForeignKeyRelationships`
+defaults to `NO`.  It is overridden to `YES` in `GDL2PostgreSQLSchemaSyncTests`
+because PostgreSQL's `_describeForeignKeysForEntity:forModel:` is fully
+implemented.  SQLite's equivalent is currently a no-op stub, so FK-constraint
+assertions are skipped for that backend.
 
 ## Building
 

@@ -27,6 +27,8 @@
 
 #import <XCTest/XCTest.h>
 #import <EOAccess/EOAccess.h>
+#import <EOAccess/EOJoin.h>
+#import <EOAccess/EORelationship.h>
 #import <EOAccess/EOSchemaGeneration.h>
 #import <EOAccess/EOSchemaSynchronization.h>
 
@@ -51,6 +53,16 @@
 
 /** SQL type name for a generic floating-point column (default: @"REAL"). */
 - (NSString *)floatTypeName;
+
+/**
+ * Returns YES if this adaptor's describeModelWithTableNames: populates
+ * relationships from the live FK constraints in the database.
+ *
+ * Defaults to NO.  Override to YES in adaptors that implement
+ * -_describeForeignKeysForEntity:forModel: (currently PostgreSQL only;
+ * SQLite's implementation is a no-op stub).
+ */
+- (BOOL)describesForeignKeyRelationships;
 
 /* ---- shared state, configured in -setUp ---- */
 

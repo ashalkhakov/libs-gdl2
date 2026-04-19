@@ -63,4 +63,10 @@
 - (NSString *)textTypeName    { return @"TEXT"; }
 - (NSString *)floatTypeName   { return @"FLOAT8"; }
 
+/**
+ * PostgreSQL's -_describeForeignKeysForEntity:forModel: is fully implemented
+ * and populates relationships from live FK constraints.
+ */
+- (BOOL)describesForeignKeyRelationships { return YES; }
+
 @end

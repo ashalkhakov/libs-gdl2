@@ -19,6 +19,9 @@
 static NSString * const kTestTable        = @"gdl2_sync_test";
 /* ── secondary name used only by testRenameTable ──────────────────── */
 static NSString * const kTestTableRenamed = @"gdl2_sync_test_renamed";
+/* ── two-table names used by relationship tests ───────────────────── */
+static NSString * const kParentTable      = @"gdl2_sync_parent";
+static NSString * const kChildTable       = @"gdl2_sync_child";
 
 /* ── convenience: case-insensitive attribute lookup by column name ── */
 static EOAttribute *attributeWithColumn(EOEntity *entity, NSString *col)
@@ -41,6 +44,7 @@ static EOAttribute *attributeWithColumn(EOEntity *entity, NSString *col)
 - (NSString *)integerTypeName        { return @"INTEGER"; }
 - (NSString *)textTypeName           { return @"TEXT"; }
 - (NSString *)floatTypeName          { return @"REAL"; }
+- (BOOL)describesForeignKeyRelationships { return NO; }
 
 /* ---- XCTest lifecycle ---- */
 
@@ -64,7 +68,10 @@ static EOAttribute *attributeWithColumn(EOEntity *entity, NSString *col)
 {
     if (self.channel)
     {
-        /* best-effort cleanup of both possible table names. */
+        /* best-effort cleanup of all possible table names. */
+        /* Child must be dropped before parent (FK constraint). */
+        [self dropTableNamed:kChildTable];
+        [self dropTableNamed:kParentTable];
         [self dropTableNamed:kTestTable];
         [self dropTableNamed:kTestTableRenamed];
         [self.channel closeChannel];
@@ -505,6 +512,303 @@ static EOAttribute *attributeWithColumn(EOEntity *entity, NSString *col)
     XCTAssertNil(old,
                  @"Old table name '%@' should not exist after rename", kTestTable);
     /* kTestTableRenamed will be cleaned up by tearDown. */
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   RELATIONSHIP HELPER
+   ═══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Build a two-entity EOModel that represents a parent→child relationship:
+ *
+ *   gdl2_sync_parent(parent_id INTEGER PK, name TEXT)
+ *   gdl2_sync_child (child_id INTEGER PK, parent_id INTEGER, label TEXT)
+ *
+ * The child entity has a to-one relationship "toParent" joining
+ * child.parent_id → parent.parent_id.
+ * The parent entity has the inverse to-many relationship "toChildren".
+ *
+ * The FK column on the child is nullable by default (isMandatory = NO).
+ */
+- (EOModel *)makeParentChildModel
+{
+    EOModel *model = [[EOModel alloc] init];
+    [model setName:@"RelTestModel"];
+    [model setAdaptorName:[self adaptorName]];
+    [model setConnectionDictionary:[self connectionDictionary]];
+
+    /* ── parent entity ───────────────────────────────────────────── */
+    EOEntity *parent = [[EOEntity alloc] init];
+    [parent setName:@"Parent"];
+    [parent setExternalName:kParentTable];
+    [parent setClassName:@"NSMutableDictionary"];
+    [model addEntity:parent];
+
+    EOAttribute *parentPK = [[EOAttribute alloc] init];
+    [parentPK setName:@"parent_id"];
+    [parentPK setColumnName:@"parent_id"];
+    [parentPK setExternalType:[self integerTypeName]];
+    [parentPK setValueClassName:@"NSNumber"];
+    [parentPK setValueType:@"i"];
+    [parentPK setAllowsNull:NO];
+    [parent addAttribute:parentPK];
+    [parent setPrimaryKeyAttributes:@[parentPK]];
+
+    EOAttribute *parentName = [[EOAttribute alloc] init];
+    [parentName setName:@"name"];
+    [parentName setColumnName:@"name"];
+    [parentName setExternalType:[self textTypeName]];
+    [parentName setValueClassName:@"NSString"];
+    [parentName setAllowsNull:YES];
+    [parent addAttribute:parentName];
+
+    /* ── child entity ────────────────────────────────────────────── */
+    EOEntity *child = [[EOEntity alloc] init];
+    [child setName:@"Child"];
+    [child setExternalName:kChildTable];
+    [child setClassName:@"NSMutableDictionary"];
+    [model addEntity:child];
+
+    EOAttribute *childPK = [[EOAttribute alloc] init];
+    [childPK setName:@"child_id"];
+    [childPK setColumnName:@"child_id"];
+    [childPK setExternalType:[self integerTypeName]];
+    [childPK setValueClassName:@"NSNumber"];
+    [childPK setValueType:@"i"];
+    [childPK setAllowsNull:NO];
+    [child addAttribute:childPK];
+    [child setPrimaryKeyAttributes:@[childPK]];
+
+    EOAttribute *fkAttr = [[EOAttribute alloc] init];
+    [fkAttr setName:@"parent_id"];
+    [fkAttr setColumnName:@"parent_id"];
+    [fkAttr setExternalType:[self integerTypeName]];
+    [fkAttr setValueClassName:@"NSNumber"];
+    [fkAttr setValueType:@"i"];
+    [fkAttr setAllowsNull:YES]; /* nullable = not mandatory */
+    [child addAttribute:fkAttr];
+
+    EOAttribute *label = [[EOAttribute alloc] init];
+    [label setName:@"label"];
+    [label setColumnName:@"label"];
+    [label setExternalType:[self textTypeName]];
+    [label setValueClassName:@"NSString"];
+    [label setAllowsNull:YES];
+    [child addAttribute:label];
+
+    /* ── to-one relationship: Child → Parent ─────────────────────── */
+    EORelationship *toParent = [[EORelationship alloc] init];
+    [toParent setName:@"toParent"];
+    [toParent setEntity:child];
+    [toParent setToMany:NO];
+    [toParent setIsMandatory:NO];
+    EOJoin *join = [EOJoin joinWithSourceAttribute:fkAttr
+                              destinationAttribute:parentPK];
+    [toParent addJoin:join];
+    [child addRelationship:toParent];
+
+    /* ── to-many relationship: Parent → Child ────────────────────── */
+    EORelationship *toChildren = [[EORelationship alloc] init];
+    [toChildren setName:@"toChildren"];
+    [toChildren setEntity:parent];
+    [toChildren setToMany:YES];
+    [toChildren setIsMandatory:NO];
+    EOJoin *inverseJoin = [EOJoin joinWithSourceAttribute:parentPK
+                                     destinationAttribute:fkAttr];
+    [toChildren addJoin:inverseJoin];
+    [parent addRelationship:toChildren];
+
+    return model;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   RELATIONSHIP TESTS
+   ═══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Creates a parent and child table connected by a FK column (to-one relationship).
+ * Verifies:
+ *   – Both tables exist with their respective columns.
+ *   – The FK column is present on the child table.
+ *   – On adaptors that describe FK constraints, the to-one relationship is
+ *     reflected back from the live schema.
+ */
+- (void)testInitialSchemaSetupWithToOneRelationship
+{
+    if (!self.channel) return;
+
+    EOModel *model = [self makeParentChildModel];
+    [self createSchemaForModel:model];
+
+    /* Both tables must exist. */
+    XCTAssertNotNil([self describeTableNamed:kParentTable],
+                    @"Parent table should exist after schema setup");
+    XCTAssertNotNil([self describeTableNamed:kChildTable],
+                    @"Child table should exist after schema setup");
+
+    /* FK column must be on the child. */
+    XCTAssertTrue([self table:kChildTable hasColumnNamed:@"parent_id"],
+                  @"FK column 'parent_id' should exist on child table");
+
+    /* On adaptors that describe FK constraints, the relationship appears. */
+    if ([self describesForeignKeyRelationships])
+    {
+        EOEntity *describedChild = [self describeTableNamed:kChildTable];
+        XCTAssertTrue([[describedChild relationships] count] > 0,
+                      @"Described child entity should have at least one FK relationship");
+    }
+}
+
+/**
+ * Creates a child table without any FK column, then adds one via schema sync
+ * (representing a new to-one relationship being introduced).
+ * Verifies the FK column is present on the child table afterwards.
+ */
+- (void)testAddToOneRelationship
+{
+    if (!self.channel) return;
+
+    /* Create parent table and a child table WITHOUT the FK column yet. */
+    EOModel *parentModel = [self modelWithColumns:@[@"parent_id", @"name"]];
+    [[parentModel entityNamed:@"TestEntity"] setExternalName:kParentTable];
+    [self createSchemaForModel:parentModel];
+
+    EOModel *childModel = [self modelWithColumns:@[@"child_id", @"label"]];
+    [[childModel entityNamed:@"TestEntity"] setExternalName:kChildTable];
+    [self createSchemaForModel:childModel];
+
+    /* Build the "after" child model: add a FK column 'parent_id'. */
+    EOEntity    *childEntity = [childModel entityNamed:@"TestEntity"];
+    EOAttribute *fkAttr      = [self makeAttributeNamed:@"parent_id"
+                                             columnName:@"parent_id"
+                                           externalType:[self integerTypeName]
+                                             allowsNull:YES];
+    [childEntity addAttribute:fkAttr];
+
+    NSDictionary *changes = @{
+        kChildTable: @{
+            @"insertedAttributes": @[fkAttr]
+        }
+    };
+    [self applySyncChanges:changes toModel:childModel];
+
+    XCTAssertTrue([self table:kChildTable hasColumnNamed:@"parent_id"],
+                  @"FK column 'parent_id' should exist on child table after add");
+
+    /* Single-table cleanup; the rename test uses kTestTableRenamed. */
+    [self dropTableNamed:kChildTable];
+    [self dropTableNamed:kParentTable];
+}
+
+/**
+ * Creates parent and child tables with a FK column, then removes that FK
+ * column via schema sync (representing dropping the to-one relationship).
+ * Verifies the FK column is absent from the child table afterwards.
+ */
+- (void)testDropToOneRelationship
+{
+    if (!self.channel) return;
+
+    EOModel *model = [self makeParentChildModel];
+    [self createSchemaForModel:model];
+
+    /* Build the "after" child model: remove the FK column. */
+    EOEntity    *childEntity = [model entityNamed:@"Child"];
+    EOAttribute *fkAttr      = [childEntity attributeNamed:@"parent_id"];
+    [childEntity removeAttribute:fkAttr];
+
+    NSDictionary *changes = @{
+        kChildTable: @{
+            @"deletedColumnNames": @[@"parent_id"]
+        }
+    };
+    [self applySyncChanges:changes toModel:model];
+
+    XCTAssertFalse([self table:kChildTable hasColumnNamed:@"parent_id"],
+                   @"FK column 'parent_id' should be absent after drop");
+    XCTAssertTrue([self table:kChildTable hasColumnNamed:@"child_id"],
+                  @"PK column 'child_id' should still be present");
+}
+
+/**
+ * Makes a to-one relationship mandatory (isMandatory = YES) by changing the
+ * FK column from NULL to NOT NULL via schema sync.
+ * Verifies that the FK column has allowsNull == NO in the live schema.
+ */
+- (void)testToOneRelationshipMandatory
+{
+    if (!self.channel) return;
+
+    EOModel *model = [self makeParentChildModel];
+    [self createSchemaForModel:model];
+
+    /* Make the FK column NOT NULL. */
+    EOEntity    *childEntity = [model entityNamed:@"Child"];
+    EOAttribute *fkAttr      = [childEntity attributeNamed:@"parent_id"];
+    [fkAttr setAllowsNull:NO];
+
+    NSDictionary *changes = @{
+        kChildTable: @{
+            @"modifiedAttributes": @{
+                @"parent_id": @{
+                    EOAllowsNullKey: @NO
+                }
+            }
+        }
+    };
+    [self applySyncChanges:changes toModel:model];
+
+    EOEntity *described = [self describeTableNamed:kChildTable];
+    XCTAssertNotNil(described, @"Child table must exist after mandatory change");
+    EOAttribute *attr = attributeWithColumn(described, @"parent_id");
+    XCTAssertNotNil(attr, @"FK column 'parent_id' should still exist");
+    XCTAssertFalse([attr allowsNull],
+                   @"FK column should be NOT NULL after isMandatory sync");
+}
+
+/**
+ * Tests the "add to-many relationship" scenario, which — at the DB level —
+ * is identical to adding a FK column on the "many" side (child) table.
+ * (The to-many lives on the parent entity in the model, but the FK column
+ * lives on the child's table.)
+ *
+ * Verifies the FK column is present on the child (many-side) table.
+ */
+- (void)testAddToManyRelationship
+{
+    if (!self.channel) return;
+
+    /* Create parent and a child table without any FK column. */
+    EOModel *parentModel = [self modelWithColumns:@[@"parent_id", @"name"]];
+    [[parentModel entityNamed:@"TestEntity"] setExternalName:kParentTable];
+    [self createSchemaForModel:parentModel];
+
+    EOModel *childModel = [self modelWithColumns:@[@"child_id", @"label"]];
+    [[childModel entityNamed:@"TestEntity"] setExternalName:kChildTable];
+    [self createSchemaForModel:childModel];
+
+    /* Add the FK column on the child (many-side) table.
+     * From the parent model's perspective, this FK column backs the
+     * to-many relationship "parent has many children". */
+    EOEntity    *childEntity = [childModel entityNamed:@"TestEntity"];
+    EOAttribute *fkAttr      = [self makeAttributeNamed:@"parent_id"
+                                             columnName:@"parent_id"
+                                           externalType:[self integerTypeName]
+                                             allowsNull:YES];
+    [childEntity addAttribute:fkAttr];
+
+    NSDictionary *changes = @{
+        kChildTable: @{
+            @"insertedAttributes": @[fkAttr]
+        }
+    };
+    [self applySyncChanges:changes toModel:childModel];
+
+    XCTAssertTrue([self table:kChildTable hasColumnNamed:@"parent_id"],
+                  @"FK column 'parent_id' (to-many backing column) should exist on child table");
+
+    [self dropTableNamed:kChildTable];
+    [self dropTableNamed:kParentTable];
 }
 
 @end
