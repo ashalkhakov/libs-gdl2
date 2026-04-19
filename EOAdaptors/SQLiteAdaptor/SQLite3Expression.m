@@ -219,7 +219,8 @@ static NSString *escapeValue(id value)
 	{
 	  continue;
 	}
-      [seenExternalNames setObject: @"YES" forKey: externalName];
+      [seenExternalNames setObject: [NSNumber numberWithBool: YES]
+			    forKey: externalName];
       group = [NSMutableArray arrayWithCapacity: 1];
       [group addObject: entity];
       [groups addObject: group];

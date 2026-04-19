@@ -48,22 +48,33 @@ static id _schemaSynchronizationDelegate = nil;
 {
   NSMutableDictionary *changes;
   Class exprClass;
+  NSString *schemaColumnName;
+  NSString *modelColumnName;
 
   changes = [NSMutableDictionary dictionary];
   exprClass = [self defaultExpressionClass];
+  schemaColumnName = [schemaAttribute columnName];
+  modelColumnName = [modelAttribute columnName];
 
-  if (![[schemaAttribute columnName] isEqualToString:[modelAttribute columnName]])
+  if ((schemaColumnName || modelColumnName)
+      && ![schemaColumnName isEqualToString: modelColumnName])
     {
-      [changes setObject:[modelAttribute columnName]
-		  forKey:EOColumnNameKey];
+      if (modelColumnName)
+	{
+	  [changes setObject: modelColumnName
+		      forKey: EOColumnNameKey];
+	}
     }
 
   if (![exprClass isColumnType:(id <EOColumnTypes>)schemaAttribute
 	equivalentToColumnType:(id <EOColumnTypes>)modelAttribute
 			 options:nil])
     {
-      [changes setObject:[modelAttribute externalType]
-		  forKey:EOExternalTypeKey];
+      if ([modelAttribute externalType])
+	{
+	  [changes setObject:[modelAttribute externalType]
+		      forKey:EOExternalTypeKey];
+	}
       if ([modelAttribute width])
 	{
 	  [changes setObject:[NSNumber numberWithUnsignedInt:[modelAttribute width]]
@@ -112,7 +123,17 @@ static id _schemaSynchronizationDelegate = nil;
 equivalentToColumnType:(id <EOColumnTypes>)columnType2
 	     options:(NSDictionary *)options
 {
-  if ([[columnType1 name] caseInsensitiveCompare:[columnType2 name]] != NSOrderedSame)
+  NSString *name1;
+  NSString *name2;
+
+  name1 = [columnType1 name];
+  name2 = [columnType2 name];
+  if (name1 == nil || name2 == nil)
+    {
+      if (name1 != name2)
+	return NO;
+    }
+  else if ([name1 caseInsensitiveCompare: name2] != NSOrderedSame)
     return NO;
   if ([columnType1 width] != [columnType2 width])
     return NO;
