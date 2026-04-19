@@ -363,7 +363,11 @@ static EOAttribute *attributeWithColumn(EOEntity *entity, NSString *col)
     EOModel *model = [self modelWithColumns:@[@"id", @"name"]];
     [self createSchemaForModel:model];
 
-    /* Build the "after" model: 'name' becomes 'full_name'. */
+    /* Build the "after" model: 'name' becomes 'full_name'.
+     * EOAttribute has two identifiers: 'name' (the ObjC property name used by
+     * EOModel/EOEntity APIs) and 'columnName' (the SQL column name used in DDL).
+     * Both must be updated so that EOEntity can find the attribute by its new
+     * name and so the schema-sync SQL is generated with the correct column. */
     EOEntity    *entity   = [model entityNamed:@"TestEntity"];
     EOAttribute *nameAttr = [entity attributeNamed:@"name"];
     [nameAttr setColumnName:@"full_name"];
