@@ -1,0 +1,12 @@
+# ── Compiler flags ──────────────────────────────────────────────────
+# ARC keeps the test code readable without requiring manual retain/release.
+ADDITIONAL_OBJCFLAGS += -fobjc-arc
+
+# ── Link against dispatch (required by GNUstep's ARC runtime) ───────
+ADDITIONAL_LDFLAGS += -ldispatch
+
+# ── Library search paths (for development / non-installed builds) ────
+# These point at the in-tree build directories.  When GDL2 is installed
+# system-wide these variables are ignored because the libraries are already
+# on the default search path.
+ADDITIONAL_NATIVE_LIB_DIRS += ../../EOAccess ../../EOControl
