@@ -40,21 +40,65 @@ NSString *EOPrecisionKey = @"precision";
 NSString *EORelationshipsKey = @"relationships";
 NSString *EOScaleKey = @"scale";
 NSString *EOWidthKey = @"width";
+static id _schemaSynchronizationDelegate = nil;
 
 @implementation EOAdaptor (EOSchemaSynchronization)
 - (NSDictionary *)objectStoreChangesFromAttribute:(EOAttribute *)schemaAttribute
 				      toAttribute:(EOAttribute *)modelAttribute
 {
-  return nil;
+  NSMutableDictionary *changes;
+  Class exprClass;
+
+  changes = [NSMutableDictionary dictionary];
+  exprClass = [self defaultExpressionClass];
+
+  if (![[schemaAttribute columnName] isEqualToString:[modelAttribute columnName]])
+    {
+      [changes setObject:[modelAttribute columnName]
+		  forKey:EOColumnNameKey];
+    }
+
+  if (![exprClass isColumnType:(id <EOColumnTypes>)schemaAttribute
+	equivalentToColumnType:(id <EOColumnTypes>)modelAttribute
+			 options:nil])
+    {
+      [changes setObject:[modelAttribute externalType]
+		  forKey:EOExternalTypeKey];
+      if ([modelAttribute width])
+	{
+	  [changes setObject:[NSNumber numberWithUnsignedInt:[modelAttribute width]]
+		      forKey:EOWidthKey];
+	}
+      if ([modelAttribute precision])
+	{
+	  [changes setObject:[NSNumber numberWithUnsignedInt:[modelAttribute precision]]
+		      forKey:EOPrecisionKey];
+	}
+      if ([modelAttribute scale])
+	{
+	  [changes setObject:[NSNumber numberWithInt:[modelAttribute scale]]
+		      forKey:EOScaleKey];
+	}
+    }
+
+  if ([schemaAttribute allowsNull] != [modelAttribute allowsNull])
+    {
+      [changes setObject:[NSNumber numberWithBool:[modelAttribute allowsNull]]
+		  forKey:EOAllowsNullKey];
+    }
+
+  return [changes count] ? [NSDictionary dictionaryWithDictionary: changes] : nil;
 }
 @end
 
 @implementation EOAdaptorChannel (EOSchemaSynchronization)
 - (void)beginSchemaSynchronization
 {
+  /* Subclasses may override to BEGIN a transaction for DDL statements. */
 }
 - (void)endSchemaSynchronization
 {
+  /* Subclasses may override to COMMIT. */
 }
 @end
 
@@ -68,13 +112,35 @@ NSString *EOWidthKey = @"width";
 equivalentToColumnType:(id <EOColumnTypes>)columnType2
 	     options:(NSDictionary *)options
 {
-  return NO;
+  if ([[columnType1 name] caseInsensitiveCompare:[columnType2 name]] != NSOrderedSame)
+    return NO;
+  if ([columnType1 width] != [columnType2 width])
+    return NO;
+  if ([columnType1 precision] != [columnType2 precision])
+    return NO;
+  if ([columnType1 scale] != [columnType2 scale])
+    return NO;
+
+  return YES;
 }
 + (NSArray *)logicalErrorsInChangeDictionary:(NSDictionary *)changes
 				    forModel:(EOModel *)model
 				     options:(NSDictionary *)options
 {
-  return nil;
+  NSMutableArray *errors;
+
+  errors = [NSMutableArray array];
+
+  if ([changes objectForKey: EOExternalTypeKey] && ![self supportsDirectColumnCoercion])
+    {
+      [errors addObject: @"Direct column type coercion is not supported by this adaptor."];
+    }
+  if ([changes objectForKey: EOColumnNameKey] && ![self supportsDirectColumnRenaming])
+    {
+      [errors addObject: @"Direct column renaming is not supported by this adaptor."];
+    }
+
+  return [errors count] ? errors : nil;
 }
 + (NSString *)phraseCastingColumnNamed:(NSString *)columnName
 			      fromType:(id <EOColumnTypes>)type
@@ -86,10 +152,11 @@ equivalentToColumnType:(id <EOColumnTypes>)columnType2
 
 + (id)schemaSynchronizationDelegate
 {
-  return nil;
+  return _schemaSynchronizationDelegate;
 }
 + (void)setSchemaSynchronizationDelegate:(id)delegate
 {
+  _schemaSynchronizationDelegate = delegate;
 }
 + (NSArray *)statementsToCopyTableNamed:(NSString *)tableName
 		intoTableForEntityGroup:(NSArray *)entityGroup

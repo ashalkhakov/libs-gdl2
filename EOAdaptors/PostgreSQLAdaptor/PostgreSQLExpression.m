@@ -60,6 +60,7 @@
 #include <EOAccess/EOEntity.h>
 #include <EOAccess/EOModel.h>
 #include <EOAccess/EOSchemaGeneration.h>
+#include <EOAccess/EOSchemaSynchronization.h>
 
 #include "PostgreSQLExpression.h"
 #include "PostgreSQLAdaptor.h"
@@ -71,6 +72,837 @@
    Ayers: Review (Don't rely on them) */
 @interface EOEntity (Undocumented)
 - (EORelationship *)relationshipForPath: (NSString *)path;
+@end
+
+@implementation PostgreSQLExpression (EOSchemaSynchronization)
+
++ (NSString *)_columnTypeStringForColumnType:(id <EOColumnTypes>)columnType
+{
+  NSString *typeName;
+
+  typeName = [columnType name];
+  if ([columnType precision])
+    {
+      return [NSString stringWithFormat: @"%@(%u, %d)",
+		       typeName,
+		       [columnType precision],
+		       [columnType scale]];
+    }
+  if ([columnType width])
+    {
+      return [NSString stringWithFormat: @"%@(%u)",
+		       typeName,
+		       [columnType width]];
+    }
+
+  return [NSString stringWithFormat: @"%@", typeName];
+}
+
++ (NSArray *)_entityGroupsForModel:(EOModel *)model
+{
+  NSMutableArray *groups;
+  NSMutableDictionary *seenExternalNames;
+  NSArray *entities;
+  unsigned i, h, count;
+
+  groups = [NSMutableArray array];
+  seenExternalNames = [NSMutableDictionary dictionary];
+  entities = [model entities];
+  count = [entities count];
+
+  for (i = 0; i < count; i++)
+    {
+      EOEntity *entity;
+      NSMutableArray *group;
+      NSString *externalName;
+
+      entity = [entities objectAtIndex: i];
+      externalName = [entity externalName];
+      if ([seenExternalNames objectForKey: externalName])
+	{
+	  continue;
+	}
+      [seenExternalNames setObject: @"YES" forKey: externalName];
+
+      group = [NSMutableArray arrayWithCapacity: 1];
+      [group addObject: entity];
+      [groups addObject: group];
+
+      for (h = i + 1; h < count; h++)
+	{
+	  EOEntity *otherEntity;
+
+	  otherEntity = [entities objectAtIndex: h];
+	  if ([[otherEntity externalName] isEqual: externalName])
+	    {
+	      [group addObject: otherEntity];
+	    }
+	}
+    }
+
+  return groups;
+}
+
++ (BOOL)_shouldProcessKey:(NSString *)key
+	forTableNamed:(NSString *)tableName
+withChangeDictionary:(NSDictionary *)changes
+{
+  NSDictionary *tableChanges;
+  NSString *value;
+
+  tableChanges = [changes objectForKey: tableName];
+  value = [tableChanges objectForKey: key];
+  if (value && [value isEqual: @"NO"])
+    return NO;
+
+  return YES;
+}
+
++ (EOAttribute *)_attributeInEntityGroup:(NSArray *)entityGroup
+		     columnNamed:(NSString *)columnName
+{
+  NSEnumerator *entityEnum;
+  EOEntity *entity;
+
+  entityEnum = [entityGroup objectEnumerator];
+  while ((entity = [entityEnum nextObject]))
+    {
+      NSEnumerator *attrEnum;
+      EOAttribute *attribute;
+
+      attrEnum = [[entity attributes] objectEnumerator];
+      while ((attribute = [attrEnum nextObject]))
+	{
+	  if ([[attribute columnName] isEqualToString: columnName])
+	    {
+	      return attribute;
+	    }
+	}
+    }
+
+  return nil;
+}
+
++ (BOOL)supportsSchemaSynchronization
+{
+  return YES;
+}
++ (BOOL)supportsDirectColumnInsertion
+{
+  return YES;
+}
++ (BOOL)supportsDirectColumnDeletion
+{
+  return YES;
+}
++ (BOOL)supportsDirectColumnRenaming
+{
+  return YES;
+}
++ (BOOL)supportsDirectColumnNullRuleModification
+{
+  return YES;
+}
++ (BOOL)supportsDirectColumnCoercion
+{
+  return YES;
+}
++ (BOOL)isCaseSensitive
+{
+  return NO;
+}
+
++ (NSArray *)statementsToInsertColumnForAttribute:(EOAttribute *)attribute
+					  options:(NSDictionary *)options
+{
+  EOEntity *entity;
+  EOSQLExpression *expr;
+  NSString *tableName;
+  NSString *columnName;
+  NSString *columnType;
+  NSString *allowsNull;
+  NSString *stmt;
+
+  entity = [attribute entity];
+  expr = [self sqlExpressionWithEntity: entity];
+  tableName = [expr sqlStringForSchemaObjectName: [entity externalName]];
+  columnName = [expr sqlStringForSchemaObjectName: [attribute columnName]];
+  columnType = [expr columnTypeStringForAttribute: attribute];
+  allowsNull = [expr allowsNullClauseForConstraint: [attribute allowsNull]];
+
+  if (allowsNull)
+    {
+      stmt = [NSString stringWithFormat: @"ALTER TABLE %@ ADD COLUMN %@ %@ %@",
+		       tableName, columnName, columnType, allowsNull];
+    }
+  else
+    {
+      stmt = [NSString stringWithFormat: @"ALTER TABLE %@ ADD COLUMN %@ %@",
+		       tableName, columnName, columnType];
+    }
+  [expr setStatement: stmt];
+
+  return [NSArray arrayWithObject: expr];
+}
+
++ (NSArray *)statementsToDeleteColumnNamed:(NSString *)columnName
+			      inTableNamed:(NSString *)tableName
+				   options:(NSDictionary *)options
+{
+  EOSQLExpression *expr;
+  NSString *quotedTableName;
+  NSString *quotedColumnName;
+  NSString *stmt;
+
+  expr = [self sqlExpressionWithEntity: nil];
+  quotedTableName = [expr sqlStringForSchemaObjectName: tableName];
+  quotedColumnName = [expr sqlStringForSchemaObjectName: columnName];
+  stmt = [NSString stringWithFormat: @"ALTER TABLE %@ DROP COLUMN %@",
+		   quotedTableName, quotedColumnName];
+  [expr setStatement: stmt];
+
+  return [NSArray arrayWithObject: expr];
+}
+
++ (NSArray *)statementsToRenameColumnNamed:(NSString *)columnName
+			      inTableNamed:(NSString *)tableName
+				   newName:(NSString *)newName
+				   options:(NSDictionary *)options
+{
+  EOSQLExpression *expr;
+  NSString *quotedTableName;
+  NSString *quotedColumnName;
+  NSString *quotedNewName;
+  NSString *stmt;
+
+  expr = [self sqlExpressionWithEntity: nil];
+  quotedTableName = [expr sqlStringForSchemaObjectName: tableName];
+  quotedColumnName = [expr sqlStringForSchemaObjectName: columnName];
+  quotedNewName = [expr sqlStringForSchemaObjectName: newName];
+
+  stmt = [NSString stringWithFormat: @"ALTER TABLE %@ RENAME COLUMN %@ TO %@",
+		   quotedTableName, quotedColumnName, quotedNewName];
+  [expr setStatement: stmt];
+
+  return [NSArray arrayWithObject: expr];
+}
+
++ (NSArray *)statementsToModifyColumnNamed:(NSString *)columnName
+			      inTableNamed:(NSString *)tableName
+				toNullRule:(BOOL)allowsNull
+				   options:(NSDictionary *)options
+{
+  EOSQLExpression *expr;
+  NSString *quotedTableName;
+  NSString *quotedColumnName;
+  NSString *stmt;
+
+  expr = [self sqlExpressionWithEntity: nil];
+  quotedTableName = [expr sqlStringForSchemaObjectName: tableName];
+  quotedColumnName = [expr sqlStringForSchemaObjectName: columnName];
+
+  if (allowsNull == NO)
+    {
+      stmt = [NSString stringWithFormat: @"ALTER TABLE %@ ALTER COLUMN %@ SET NOT NULL",
+		       quotedTableName, quotedColumnName];
+    }
+  else
+    {
+      stmt = [NSString stringWithFormat: @"ALTER TABLE %@ ALTER COLUMN %@ DROP NOT NULL",
+		       quotedTableName, quotedColumnName];
+    }
+  [expr setStatement: stmt];
+
+  return [NSArray arrayWithObject: expr];
+}
+
++ (NSArray *)statementsToConvertColumnNamed:(NSString *)columnName
+			       inTableNamed:(NSString *)tableName
+				   fromType:(id <EOColumnTypes>)type
+				     toType:(id <EOColumnTypes>)newType
+				    options:(NSDictionary *)options
+{
+  EOSQLExpression *expr;
+  NSString *quotedTableName;
+  NSString *quotedColumnName;
+  NSString *newTypeString;
+  NSString *castPhrase;
+  NSString *stmt;
+
+  expr = [self sqlExpressionWithEntity: nil];
+  quotedTableName = [expr sqlStringForSchemaObjectName: tableName];
+  quotedColumnName = [expr sqlStringForSchemaObjectName: columnName];
+  newTypeString = [self _columnTypeStringForColumnType: newType];
+  castPhrase = [self phraseCastingColumnNamed: columnName
+				     fromType: type
+				       toType: newType
+				      options: options];
+
+  stmt = [NSString stringWithFormat: @"ALTER TABLE %@ ALTER COLUMN %@ TYPE %@ USING %@",
+		   quotedTableName, quotedColumnName, newTypeString, castPhrase];
+  [expr setStatement: stmt];
+
+  return [NSArray arrayWithObject: expr];
+}
+
++ (NSString *)phraseCastingColumnNamed:(NSString *)columnName
+			      fromType:(id <EOColumnTypes>)type
+				toType:(id <EOColumnTypes>)castType
+			       options:(NSDictionary *)options
+{
+  EOSQLExpression *expr;
+  NSString *quotedColumnName;
+  NSString *castTypeString;
+
+  expr = [self sqlExpressionWithEntity: nil];
+  quotedColumnName = [expr sqlStringForSchemaObjectName: columnName];
+  castTypeString = [self _columnTypeStringForColumnType: castType];
+
+  return [NSString stringWithFormat: @"CAST(%@ AS %@)",
+		   quotedColumnName, castTypeString];
+}
+
++ (NSArray *)statementsToRenameTableNamed:(NSString *)tableName
+				  newName:(NSString *)newName
+				  options:(NSDictionary *)options
+{
+  EOSQLExpression *expr;
+  NSString *quotedTableName;
+  NSString *quotedNewName;
+  NSString *stmt;
+
+  expr = [self sqlExpressionWithEntity: nil];
+  quotedTableName = [expr sqlStringForSchemaObjectName: tableName];
+  quotedNewName = [expr sqlStringForSchemaObjectName: newName];
+  stmt = [NSString stringWithFormat: @"ALTER TABLE %@ RENAME TO %@",
+		   quotedTableName, quotedNewName];
+  [expr setStatement: stmt];
+
+  return [NSArray arrayWithObject: expr];
+}
+
++ (NSArray *)statementsToDropPrimaryKeyConstraintsOnEntityGroups:(NSArray *)entityGroups
+					    withChangeDictionary:(NSDictionary *)changes
+							 options:(NSDictionary *)options
+{
+  NSMutableArray *sqlExps;
+  NSEnumerator *groupEnum;
+  NSArray *group;
+
+  sqlExps = [NSMutableArray array];
+  groupEnum = [entityGroups objectEnumerator];
+  while ((group = [groupEnum nextObject]))
+    {
+      EOEntity *entity;
+      EOSQLExpression *expr;
+      NSString *tableName;
+      NSString *constraintName;
+      NSString *stmt;
+
+      entity = [group objectAtIndex: 0];
+      tableName = [entity externalName];
+      if ([self _shouldProcessKey: EOSchemaSynchronizationPrimaryKeyConstraintsKey
+		    forTableNamed: tableName
+	      withChangeDictionary: changes] == NO)
+	{
+	  continue;
+	}
+
+      expr = [self sqlExpressionWithEntity: entity];
+      tableName = [expr sqlStringForSchemaObjectName: tableName];
+      constraintName = [NSString stringWithFormat: @"%@_pkey", [entity externalName]];
+      constraintName = [expr sqlStringForSchemaObjectName: constraintName];
+      stmt = [NSString stringWithFormat: @"ALTER TABLE %@ DROP CONSTRAINT %@",
+		       tableName, constraintName];
+      [expr setStatement: stmt];
+      [sqlExps addObject: expr];
+    }
+
+  return sqlExps;
+}
+
++ (NSArray *)statementsToImplementPrimaryKeyConstraintsOnEntityGroups:(NSArray *)entityGroups
+						 withChangeDictionary:(NSDictionary *)changes
+							      options:(NSDictionary *)options
+{
+  return [self primaryKeyConstraintStatementsForEntityGroups: entityGroups];
+}
+
++ (NSArray *)statementsToDropPrimaryKeySupportForEntityGroups:(NSArray *)entityGroups
+					 withChangeDictionary:(NSDictionary *)changes
+						      options:(NSDictionary *)options
+{
+  return [self dropPrimaryKeySupportStatementsForEntityGroups: entityGroups];
+}
+
++ (NSArray *)statementsToImplementPrimaryKeySupportForEntityGroups:(NSArray *)entityGroups
+					      withChangeDictionary:(NSDictionary *)changes
+							   options:(NSDictionary *)options
+{
+  return [self primaryKeySupportStatementsForEntityGroups: entityGroups];
+}
+
++ (NSArray *)statementsToDropForeignKeyConstraintsOnEntityGroups:(NSArray *)entityGroups
+					    withChangeDictionary:(NSDictionary *)changes
+							 options:(NSDictionary *)options
+{
+  NSMutableArray *sqlExps;
+  NSEnumerator *groupEnum;
+  NSArray *group;
+
+  sqlExps = [NSMutableArray array];
+  groupEnum = [entityGroups objectEnumerator];
+  while ((group = [groupEnum nextObject]))
+    {
+      NSEnumerator *entityEnum;
+      EOEntity *entity;
+
+      entityEnum = [group objectEnumerator];
+      while ((entity = [entityEnum nextObject]))
+	{
+	  EOEntity *parentEntity;
+	  NSArray *relationships;
+	  NSEnumerator *relEnum;
+	  EORelationship *relationship;
+	  NSString *tableName;
+
+	  parentEntity = [entity parentEntity];
+	  if (parentEntity != nil)
+	    continue;
+
+	  tableName = [entity externalName];
+	  if ([self _shouldProcessKey: EOSchemaSynchronizationForeignKeyConstraintsKey
+			forTableNamed: tableName
+		  withChangeDictionary: changes] == NO)
+	    {
+	      continue;
+	    }
+
+	  relationships = [entity relationships];
+	  relEnum = [relationships objectEnumerator];
+	  while ((relationship = [relEnum nextObject]))
+	    {
+	      EOSQLExpression *expr;
+	      NSString *quotedTableName;
+	      NSString *constraintName;
+	      NSString *stmt;
+
+	      if ([[relationship entity] model]
+		  != [[relationship destinationEntity] model])
+		continue;
+	      if ([relationship isToMany] == YES
+		  || ([relationship inverseRelationship] != nil
+		      && [[relationship inverseRelationship] isToMany] == NO))
+		continue;
+
+	      expr = [self sqlExpressionWithEntity: entity];
+	      quotedTableName = [expr sqlStringForSchemaObjectName: [entity externalName]];
+	      constraintName = [NSString stringWithFormat: @"%@_%@_FK",
+				 [entity externalName], [relationship name]];
+	      constraintName = [expr sqlStringForSchemaObjectName: constraintName];
+	      stmt = [NSString stringWithFormat: @"ALTER TABLE %@ DROP CONSTRAINT %@",
+			       quotedTableName, constraintName];
+	      [expr setStatement: stmt];
+	      [sqlExps addObject: expr];
+	    }
+	}
+    }
+
+  return sqlExps;
+}
+
++ (NSArray *)statementsToImplementForeignKeyConstraintsOnEntityGroups:(NSArray *)entityGroups
+						 withChangeDictionary:(NSDictionary *)changes
+							      options:(NSDictionary *)options
+{
+  return [self foreignKeyConstraintStatementsForEntityGroups: entityGroups];
+}
+
++ (NSArray *)statementsToUpdateObjectStoreForEntityGroups:(NSArray *)entityGroups
+				     withChangeDictionary:(NSDictionary *)changes
+						  options:(NSDictionary *)options
+{
+  NSMutableArray *sqlExps;
+  NSEnumerator *groupEnum;
+  NSArray *group;
+
+  sqlExps = [NSMutableArray array];
+  groupEnum = [entityGroups objectEnumerator];
+  while ((group = [groupEnum nextObject]))
+    {
+      EOEntity *entity;
+      NSString *tableName;
+      NSDictionary *entityChanges;
+      NSArray *insertedAttributes;
+      NSArray *deletedColumnNames;
+      NSDictionary *renamedColumns;
+      NSDictionary *modifiedAttributes;
+      NSString *newTableName;
+      BOOL doFK;
+      BOOL doPK;
+      BOOL doPKSupport;
+      NSEnumerator *objEnum;
+      id obj;
+
+      entity = [group objectAtIndex: 0];
+      tableName = [entity externalName];
+      entityChanges = [changes objectForKey: tableName];
+      if (entityChanges == nil)
+	continue;
+
+      doFK = [self _shouldProcessKey: EOSchemaSynchronizationForeignKeyConstraintsKey
+		 forTableNamed: tableName
+	   withChangeDictionary: changes];
+      doPK = [self _shouldProcessKey: EOSchemaSynchronizationPrimaryKeyConstraintsKey
+		 forTableNamed: tableName
+	   withChangeDictionary: changes];
+      doPKSupport = [self _shouldProcessKey: EOSchemaSynchronizationPrimaryKeySupportKey
+			forTableNamed: tableName
+		  withChangeDictionary: changes];
+
+      if (doFK)
+	{
+	  [sqlExps addObjectsFromArray:
+		    [self statementsToDropForeignKeyConstraintsOnEntityGroups:
+			    [NSArray arrayWithObject: group]
+					      withChangeDictionary: changes
+							   options: options]];
+	}
+      if (doPK)
+	{
+	  [sqlExps addObjectsFromArray:
+		    [self statementsToDropPrimaryKeyConstraintsOnEntityGroups:
+			    [NSArray arrayWithObject: group]
+					     withChangeDictionary: changes
+							  options: options]];
+	}
+      if (doPKSupport)
+	{
+	  [sqlExps addObjectsFromArray:
+		    [self statementsToDropPrimaryKeySupportForEntityGroups:
+			    [NSArray arrayWithObject: group]
+					  withChangeDictionary: changes
+						       options: options]];
+	}
+
+      insertedAttributes = [entityChanges objectForKey: @"insertedAttributes"];
+      deletedColumnNames = [entityChanges objectForKey: @"deletedColumnNames"];
+      renamedColumns = [entityChanges objectForKey: @"renamedColumns"];
+      modifiedAttributes = [entityChanges objectForKey: @"modifiedAttributes"];
+
+      objEnum = [insertedAttributes objectEnumerator];
+      while ((obj = [objEnum nextObject]))
+	{
+	  [sqlExps addObjectsFromArray:
+		    [self statementsToInsertColumnForAttribute: obj
+						 options: options]];
+	}
+
+      objEnum = [deletedColumnNames objectEnumerator];
+      while ((obj = [objEnum nextObject]))
+	{
+	  [sqlExps addObjectsFromArray:
+		    [self statementsToDeleteColumnNamed: obj
+					   inTableNamed: tableName
+						options: options]];
+	}
+
+      objEnum = [renamedColumns keyEnumerator];
+      while ((obj = [objEnum nextObject]))
+	{
+	  NSString *oldColumnName;
+	  NSString *newColumnName;
+
+	  oldColumnName = obj;
+	  newColumnName = [renamedColumns objectForKey: oldColumnName];
+	  [sqlExps addObjectsFromArray:
+		    [self statementsToRenameColumnNamed: oldColumnName
+					   inTableNamed: tableName
+						newName: newColumnName
+						options: options]];
+	}
+
+      objEnum = [modifiedAttributes keyEnumerator];
+      while ((obj = [objEnum nextObject]))
+	{
+	  NSString *columnName;
+	  NSDictionary *columnChanges;
+	  NSString *currentColumnName;
+	  NSString *newColumnName;
+	  NSNumber *allowsNull;
+	  NSString *newExternalType;
+
+	  columnName = obj;
+	  columnChanges = [modifiedAttributes objectForKey: columnName];
+	  currentColumnName = columnName;
+
+	  newColumnName = [columnChanges objectForKey: EOColumnNameKey];
+	  if (newColumnName
+	      && [renamedColumns objectForKey: columnName] == nil)
+	    {
+	      [sqlExps addObjectsFromArray:
+			[self statementsToRenameColumnNamed: columnName
+					       inTableNamed: tableName
+						    newName: newColumnName
+						    options: options]];
+	      currentColumnName = newColumnName;
+	    }
+
+	  newExternalType = [columnChanges objectForKey: EOExternalTypeKey];
+	  if (newExternalType)
+	    {
+	      EOAttribute *newTypeAttribute;
+	      EOAttribute *oldTypeAttribute;
+	      NSNumber *numberValue;
+
+	      oldTypeAttribute = [self _attributeInEntityGroup: group
+						   columnNamed: currentColumnName];
+	      newTypeAttribute = AUTORELEASE([[EOAttribute alloc] init]);
+	      [newTypeAttribute setName: currentColumnName];
+	      [newTypeAttribute setColumnName: currentColumnName];
+	      [newTypeAttribute setExternalType: newExternalType];
+
+	      numberValue = [columnChanges objectForKey: EOWidthKey];
+	      if (numberValue)
+		[newTypeAttribute setWidth: [numberValue unsignedIntValue]];
+
+	      numberValue = [columnChanges objectForKey: EOPrecisionKey];
+	      if (numberValue)
+		[newTypeAttribute setPrecision: [numberValue unsignedIntValue]];
+
+	      numberValue = [columnChanges objectForKey: EOScaleKey];
+	      if (numberValue)
+		[newTypeAttribute setScale: [numberValue intValue]];
+
+	      [sqlExps addObjectsFromArray:
+			[self statementsToConvertColumnNamed: currentColumnName
+					       inTableNamed: tableName
+						   fromType: (oldTypeAttribute ? (id <EOColumnTypes>)oldTypeAttribute : (id <EOColumnTypes>)newTypeAttribute)
+						     toType: (id <EOColumnTypes>)newTypeAttribute
+						    options: options]];
+	    }
+
+	  allowsNull = [columnChanges objectForKey: EOAllowsNullKey];
+	  if (allowsNull)
+	    {
+	      [sqlExps addObjectsFromArray:
+			[self statementsToModifyColumnNamed: currentColumnName
+					       inTableNamed: tableName
+						 toNullRule: [allowsNull boolValue]
+						    options: options]];
+	    }
+	}
+
+      if (doPKSupport)
+	{
+	  [sqlExps addObjectsFromArray:
+		    [self statementsToImplementPrimaryKeySupportForEntityGroups:
+			    [NSArray arrayWithObject: group]
+						 withChangeDictionary: changes
+							      options: options]];
+	}
+      if (doPK)
+	{
+	  [sqlExps addObjectsFromArray:
+		    [self statementsToImplementPrimaryKeyConstraintsOnEntityGroups:
+			    [NSArray arrayWithObject: group]
+						      withChangeDictionary: changes
+								   options: options]];
+	}
+      if (doFK)
+	{
+	  [sqlExps addObjectsFromArray:
+		    [self statementsToImplementForeignKeyConstraintsOnEntityGroups:
+			    [NSArray arrayWithObject: group]
+						 withChangeDictionary: changes
+							      options: options]];
+	}
+
+      newTableName = [entityChanges objectForKey: EOExternalNameKey];
+      if (newTableName)
+	{
+	  [sqlExps addObjectsFromArray:
+		    [self statementsToRenameTableNamed: tableName
+					       newName: newTableName
+					       options: options]];
+	}
+    }
+
+  return sqlExps;
+}
+
++ (NSArray *)statementsToUpdateObjectStoreForModel:(EOModel *)model
+			      withChangeDictionary:(NSDictionary *)changes
+					   options:(NSDictionary *)options
+{
+  NSArray *entityGroups;
+
+  entityGroups = [self _entityGroupsForModel: model];
+
+  return [self statementsToUpdateObjectStoreForEntityGroups: entityGroups
+				 withChangeDictionary: changes
+					      options: options];
+}
+
++ (NSArray *)statementsToCopyTableNamed:(NSString *)tableName
+		intoTableForEntityGroup:(NSArray *)entityGroup
+		   withChangeDictionary:(NSDictionary *)changes
+				options:(NSDictionary *)options
+{
+  NSMutableArray *sqlExps;
+  EOEntity *entity;
+  EOSQLExpression *expr;
+  NSString *tmpTableName;
+  NSString *quotedTableName;
+  NSString *quotedTmpTableName;
+  NSArray *createStatements;
+  NSDictionary *renamedColumns;
+  NSMutableDictionary *oldByNewColumnNames;
+  NSArray *insertedAttributes;
+  NSArray *deletedColumnNames;
+  NSMutableArray *insertColumns;
+  NSMutableArray *selectColumns;
+  NSEnumerator *entityEnum;
+  EOEntity *iterEntity;
+
+  sqlExps = [NSMutableArray array];
+  entity = [entityGroup objectAtIndex: 0];
+  expr = [self sqlExpressionWithEntity: entity];
+  tmpTableName = [NSString stringWithFormat: @"__gdl2tmp__%@", tableName];
+  quotedTableName = [expr sqlStringForSchemaObjectName: tableName];
+  quotedTmpTableName = [expr sqlStringForSchemaObjectName: tmpTableName];
+
+  createStatements = [self createTableStatementsForEntityGroup: entityGroup];
+  if ([createStatements count])
+    {
+      EOSQLExpression *createExpr;
+      EOSQLExpression *newExpr;
+      NSString *createStmt;
+
+      createExpr = [createStatements objectAtIndex: 0];
+      createStmt = [[createExpr statement] stringByReplacingOccurrencesOfString: quotedTableName
+								      withString: quotedTmpTableName];
+      newExpr = [self sqlExpressionWithEntity: entity];
+      [newExpr setStatement: createStmt];
+      [sqlExps addObject: newExpr];
+    }
+
+  renamedColumns = [changes objectForKey: @"renamedColumns"];
+  oldByNewColumnNames = [NSMutableDictionary dictionary];
+  {
+    NSEnumerator *nameEnum;
+    NSString *oldColumnName;
+
+    nameEnum = [renamedColumns keyEnumerator];
+    while ((oldColumnName = [nameEnum nextObject]))
+      {
+	[oldByNewColumnNames setObject: oldColumnName
+				 forKey: [renamedColumns objectForKey: oldColumnName]];
+      }
+  }
+
+  insertedAttributes = [changes objectForKey: @"insertedAttributes"];
+  deletedColumnNames = [changes objectForKey: @"deletedColumnNames"];
+  insertColumns = [NSMutableArray array];
+  selectColumns = [NSMutableArray array];
+
+  entityEnum = [entityGroup objectEnumerator];
+  while ((iterEntity = [entityEnum nextObject]))
+    {
+      NSEnumerator *attrEnum;
+      EOAttribute *attribute;
+
+      attrEnum = [[iterEntity attributes] objectEnumerator];
+      while ((attribute = [attrEnum nextObject]))
+	{
+	  NSString *targetColumnName;
+	  NSString *sourceColumnName;
+	  BOOL skipColumn;
+	  NSEnumerator *insertedEnum;
+	  EOAttribute *insertedAttribute;
+
+	  targetColumnName = [attribute columnName];
+	  sourceColumnName = [oldByNewColumnNames objectForKey: targetColumnName];
+	  if (sourceColumnName == nil)
+	    sourceColumnName = targetColumnName;
+
+	  skipColumn = NO;
+	  insertedEnum = [insertedAttributes objectEnumerator];
+	  while ((insertedAttribute = [insertedEnum nextObject]))
+	    {
+	      if ([[insertedAttribute columnName] isEqualToString: targetColumnName])
+		{
+		  skipColumn = YES;
+		  break;
+		}
+	    }
+	  if ([deletedColumnNames containsObject: sourceColumnName])
+	    {
+	      skipColumn = YES;
+	    }
+	  if (skipColumn)
+	    continue;
+
+	  [insertColumns addObject: [expr sqlStringForSchemaObjectName: targetColumnName]];
+	  [selectColumns addObject: [expr sqlStringForSchemaObjectName: sourceColumnName]];
+	}
+    }
+
+  if ([insertColumns count])
+    {
+      NSString *stmt;
+      EOSQLExpression *insertExpr;
+
+      insertExpr = [self sqlExpressionWithEntity: entity];
+      stmt = [NSString stringWithFormat: @"INSERT INTO %@ (%@) SELECT %@ FROM %@",
+		       quotedTmpTableName,
+		       [insertColumns componentsJoinedByString: @", "],
+		       [selectColumns componentsJoinedByString: @", "],
+		       quotedTableName];
+      [insertExpr setStatement: stmt];
+      [sqlExps addObject: insertExpr];
+    }
+
+  {
+    EOSQLExpression *dropExpr;
+    NSString *stmt;
+
+    dropExpr = [self sqlExpressionWithEntity: entity];
+    stmt = [NSString stringWithFormat: @"DROP TABLE %@", quotedTableName];
+    [dropExpr setStatement: stmt];
+    [sqlExps addObject: dropExpr];
+  }
+
+  {
+    EOSQLExpression *renameExpr;
+    NSString *stmt;
+
+    renameExpr = [self sqlExpressionWithEntity: entity];
+    stmt = [NSString stringWithFormat: @"ALTER TABLE %@ RENAME TO %@",
+		     quotedTmpTableName, quotedTableName];
+    [renameExpr setStatement: stmt];
+    [sqlExps addObject: renameExpr];
+  }
+
+  [sqlExps addObjectsFromArray:
+	    [self statementsToImplementPrimaryKeySupportForEntityGroups:
+		    [NSArray arrayWithObject: entityGroup]
+						 withChangeDictionary: changes
+							      options: options]];
+  [sqlExps addObjectsFromArray:
+	    [self statementsToImplementPrimaryKeyConstraintsOnEntityGroups:
+		    [NSArray arrayWithObject: entityGroup]
+						      withChangeDictionary: changes
+								   options: options]];
+  [sqlExps addObjectsFromArray:
+	    [self statementsToImplementForeignKeyConstraintsOnEntityGroups:
+		    [NSArray arrayWithObject: entityGroup]
+						 withChangeDictionary: changes
+							      options: options]];
+
+  return sqlExps;
+}
+
 @end
 
 @interface EOSQLExpression (PrivatUndocumented)
